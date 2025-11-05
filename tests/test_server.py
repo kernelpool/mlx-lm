@@ -17,6 +17,7 @@ class DummyModelProvider:
         HF_MODEL_PATH = "mlx-community/Qwen1.5-0.5B-Chat-4bit"
         self.model, self.tokenizer = load(HF_MODEL_PATH)
         self.model_key = (HF_MODEL_PATH, None)
+        self.model_id = None
 
         # Add draft model support
         self.draft_model = None
@@ -563,6 +564,57 @@ class TestKeepalive(unittest.TestCase):
             keepalive_callback(3072, 4096)
         except Exception as e:
             self.fail(f"Callback should handle BrokenPipeError: {e}")
+
+
+class TestModelIdEndpoint(unittest.TestCase):
+    """Tests for model_id functionality in /v1/models endpoint"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model_provider = DummyModelProvider()
+        cls.model_provider.model_id = "test-org/test-model"
+        cls.server_address = ("localhost", 0)
+        cls.httpd = http.server.HTTPServer(
+            cls.server_address,
+            lambda *args, **kwargs: APIHandler(cls.model_provider, *args, **kwargs),
+        )
+        cls.port = cls.httpd.server_port
+        cls.server_thread = threading.Thread(target=cls.httpd.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        cls.server_thread.join()
+
+    def test_model_id_appears_in_models_list(self):
+        """Test that model_id appears in /v1/models response"""
+        url = f"http://localhost:{self.port}/v1/models"
+        response = requests.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        response_body = json.loads(response.text)
+        model_ids = [m["id"] for m in response_body["data"]]
+
+        # Model ID should be in the list
+        self.assertIn("test-org/test-model", model_ids)
+
+        # Should appear first
+        self.assertEqual(response_body["data"][0]["id"], "test-org/test-model")
+
+    def test_model_id_filter(self):
+        """Test that /v1/models/{model_id} returns only that model"""
+        url = f"http://localhost:{self.port}/v1/models/test-org/test-model"
+        response = requests.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        response_body = json.loads(response.text)
+
+        # Should only have models matching the filter
+        for model in response_body["data"]:
+            self.assertEqual(model["id"], "test-org/test-model")
 
 
 if __name__ == "__main__":

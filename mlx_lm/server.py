@@ -160,6 +160,7 @@ class ModelProvider:
         self.model = None
         self.tokenizer = None
         self.draft_model = None
+        self.model_id = None
 
         # Preload the default model if it is provided
         self.default_model_map = {}
@@ -178,6 +179,7 @@ class ModelProvider:
         self.tokenizer = None
         self.model_key = None
         self.draft_model = None
+        self.model_id = None
 
         # Building tokenizer_config
         tokenizer_config = {
@@ -198,6 +200,16 @@ class ModelProvider:
                 adapter_path=adapter_path,
                 tokenizer_config=tokenizer_config,
             )
+
+            if self.cli_args.model_id:
+                self.model_id = self.cli_args.model_id
+            else:
+                path_parts = Path(self.cli_args.model).parts
+                if len(path_parts) >= 2:
+                    self.model_id = f"{path_parts[-2]}/{path_parts[-1]}"
+
+            if self.model_id:
+                self.default_model_map[self.model_id] = "default_model"
         else:
             model, tokenizer = load(
                 model_path, adapter_path=adapter_path, tokenizer_config=tokenizer_config
@@ -940,6 +952,23 @@ class APIHandler(BaseHTTPRequestHandler):
             for repo in downloaded_models
         ]
 
+        # Add currently loaded model if available and not already in list
+        model_id = self.model_provider.model_id
+        if (
+            self.model_provider.model_key is not None
+            and model_id
+            and (filter_repo_id is None or model_id == filter_repo_id)
+            and model_id not in [m["id"] for m in models]
+        ):
+            models.insert(
+                0,
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": self.created,
+                },
+            )
+
         response = {"object": "list", "data": models}
 
         response_json = json.dumps(response).encode()
@@ -984,6 +1013,11 @@ def main():
         "--model",
         type=str,
         help="The path to the MLX model weights, tokenizer, and config",
+    )
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        help="Optional model ID for the loaded model (e.g., 'org/model-name')",
     )
     parser.add_argument(
         "--adapter-path",
