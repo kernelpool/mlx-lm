@@ -18,6 +18,7 @@ if __name__ == "__main__":
         "generate",
         "lora",
         "perplexity",
+        "rlm",
         "server",
         "manage",
         "upload",

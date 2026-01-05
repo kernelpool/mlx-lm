@@ -56,6 +56,7 @@ setup(
             "mlx_lm.generate = mlx_lm.generate:main",
             "mlx_lm.lora = mlx_lm.lora:main",
             "mlx_lm.perplexity = mlx_lm.perplexity:main",
+            "mlx_lm.rlm = mlx_lm.rlm:main",
             "mlx_lm.server = mlx_lm.server:main",
             "mlx_lm.manage = mlx_lm.manage:main",
             "mlx_lm.upload = mlx_lm.upload:main",
