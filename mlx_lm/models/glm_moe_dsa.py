@@ -52,6 +52,7 @@ class ModelArgs(BaseModelArgs):
     index_head_dim: int = 128
     index_n_heads: int = 32
     index_topk: int = 2048
+    indexer_rope_interleave: bool = True
     quantization: Optional[Dict[str, Any]] = None
 
 
