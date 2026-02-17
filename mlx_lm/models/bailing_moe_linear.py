@@ -15,6 +15,7 @@ from .base import (
     scaled_dot_product_attention,
 )
 from .cache import ArraysCache, KVCache
+from .gla import gla_recurrent
 from .rope_utils import initialize_rope
 from .switch_layers import SwitchGLU
 
@@ -58,43 +59,6 @@ class ModelArgs(BaseModelArgs):
     moe_shared_expert_intermediate_size: Optional[int] = None
     moe_router_enable_shared_expert: bool = True
     head_dim: Optional[int] = None
-
-
-def recurrent_gla(
-    q: mx.array,
-    k: mx.array,
-    v: mx.array,
-    g: mx.array,
-    scale: float,
-    h: Optional[mx.array] = None,
-) -> mx.array:
-    """
-    Recurrence per (b, h):
-        h_t = h_{t-1} * exp(g_t)
-        h_t = h_t + k_t^T @ v_t
-        y_t = (q_t @ h_t) * scale
-    Returns y with shape [B, H, T, Dv].
-    """
-    B, Hq, L, K = q.shape
-    Hv = k.shape[1]
-    V = v.shape[-1]
-
-    outputs = []
-    exp_g = mx.exp(g)[:, None, None].astype(q.dtype)
-    q = q * scale
-    for t in range(L):
-        q_t = q[:, :, t : t + 1]
-        k_t = k[:, :, t : t + 1]
-        v_t = v[:, :, t : t + 1]
-        h_up = k_t.transpose(0, 1, 3, 2) @ v_t
-        if h is not None:
-            h = h * exp_g + h_up
-        else:
-            h = h_up
-        o_t = q_t @ h
-        outputs.append(o_t)
-
-    return mx.concatenate(outputs, axis=2), h
 
 
 class GroupRMSNorm(nn.Module):
@@ -313,7 +277,7 @@ class LinearAttention(nn.Module):
 
         if cache is None:
             cache = [None]
-        output, cache[0] = recurrent_gla(
+        output, cache[0] = gla_recurrent(
             q=queries,
             k=keys,
             v=values,
