@@ -141,6 +141,10 @@ class _BaseCache:
         if v is not None and v:
             raise ValueError("This cache has no meta_state but a meta_state was set.")
 
+    def checkpoint(self):
+        """Save current state for restoration via trim(). No-op by default."""
+        pass
+
     def is_trimmable(self):
         return False
 
@@ -571,6 +575,7 @@ class ArraysCache(_BaseCache):
 
     def __init__(self, size, left_padding: Optional[List[int]] = None):
         self.cache = [None] * size
+        self._checkpoint = None
         if left_padding:
             self.left_padding = mx.array(left_padding)
 
@@ -593,17 +598,40 @@ class ArraysCache(_BaseCache):
         In-place filter to keep just the given indices in the cache.
         """
         self.cache = [c[batch_indices] for c in self.cache]
+        if self._checkpoint is not None:
+            self._checkpoint = [c[batch_indices] for c in self._checkpoint]
 
     def extend(self, other):
         """
         In-place extend this cache with the other cache.
         """
         self.cache = [mx.concatenate([c, o]) for c, o in zip(self.cache, other.cache)]
+        if self._checkpoint is not None and other._checkpoint is not None:
+            self._checkpoint = [
+                mx.concatenate([c, o])
+                for c, o in zip(self._checkpoint, other._checkpoint)
+            ]
+        else:
+            self._checkpoint = None
 
     def extract(self, idx):
         cache = ArraysCache(len(self.cache))
         cache.cache = [c[idx : idx + 1] for c in self.cache]
+        if self._checkpoint is not None:
+            cache._checkpoint = [c[idx : idx + 1] for c in self._checkpoint]
         return cache
+
+    def checkpoint(self):
+        self._checkpoint = list(self.cache)
+
+    def is_trimmable(self):
+        return self._checkpoint is not None
+
+    def trim(self, n):
+        if self._checkpoint is None:
+            return 0
+        self.cache = list(self._checkpoint)
+        return n
 
     def prepare(self, lengths=None, **kwargs):
         self.lengths = mx.array(lengths)
@@ -731,6 +759,10 @@ class CacheList(_BaseCache):
 
     def __getitem__(self, idx):
         return self.caches[idx]
+
+    def checkpoint(self):
+        for c in self.caches:
+            c.checkpoint()
 
     def is_trimmable(self):
         return all(c.is_trimmable() for c in self.caches)

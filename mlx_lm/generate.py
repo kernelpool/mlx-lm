@@ -448,6 +448,9 @@ def generate_step(
 
         y, logprobs = _step(input_tokens=prompt, input_embeddings=input_embeddings)
 
+        for c in prompt_cache:
+            c.checkpoint()
+
     mx.async_eval(y, logprobs)
     n = 0
     while True:
@@ -1113,6 +1116,9 @@ class BatchGenerator:
         y, logprobs = self._step(
             inputs, prompt_cache, samplers, logits_processors, tokens
         )
+
+        for c in prompt_cache:
+            c.checkpoint()
 
         mx.async_eval(y, logprobs)
 

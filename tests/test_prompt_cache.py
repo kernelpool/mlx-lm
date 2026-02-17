@@ -397,6 +397,153 @@ class TestPromptCache(unittest.TestCase):
         self.assertTrue(mx.array_equal(c2_ex[0][0], c2[0][0]))
         self.assertTrue(mx.array_equal(c2_ex[1].state[0], c2[1].state[0]))
 
+    def test_arrays_cache_checkpoint(self):
+        ac = ArraysCache(size=2)
+        self.assertFalse(ac.is_trimmable())
+
+        prompt_state_0 = mx.random.normal(shape=(1, 4, 16, 16))
+        prompt_state_1 = mx.random.normal(shape=(1, 4, 3))
+        ac[0] = prompt_state_0
+        ac[1] = prompt_state_1
+
+        ac.checkpoint()
+        self.assertTrue(ac.is_trimmable())
+
+        ac[0] = mx.random.normal(shape=(1, 4, 16, 16))
+        ac[1] = mx.random.normal(shape=(1, 4, 3))
+        self.assertFalse(mx.array_equal(ac[0], prompt_state_0))
+
+        n = ac.trim(50)
+        self.assertEqual(n, 50)
+        self.assertTrue(mx.array_equal(ac[0], prompt_state_0))
+        self.assertTrue(mx.array_equal(ac[1], prompt_state_1))
+
+    def test_checkpoint_trim_mixed_cache(self):
+        cache = [ArraysCache(size=2), KVCache(), ArraysCache(size=2), KVCache()]
+
+        for c in cache:
+            if isinstance(c, ArraysCache):
+                c[0] = mx.random.normal(shape=(1, 4, 3))
+                c[1] = mx.random.normal(shape=(1, 4, 16, 16))
+            else:
+                x = mx.random.uniform(shape=(1, 8, 20, 4))
+                c.update_and_fetch(x, x)
+
+        self.assertFalse(all(c.is_trimmable() for c in cache))
+
+        for c in cache:
+            c.checkpoint()
+        self.assertTrue(all(c.is_trimmable() for c in cache))
+
+        prompt_states = []
+        for c in cache:
+            if isinstance(c, ArraysCache):
+                prompt_states.append((mx.array(c[0]), mx.array(c[1])))
+            else:
+                prompt_states.append(c.offset)
+
+        for _ in range(10):
+            for c in cache:
+                if isinstance(c, ArraysCache):
+                    c[0] = mx.random.normal(shape=(1, 4, 3))
+                    c[1] = mx.random.normal(shape=(1, 4, 16, 16))
+                else:
+                    x = mx.random.uniform(shape=(1, 8, 1, 4))
+                    c.update_and_fetch(x, x)
+
+        for c, ps in zip(cache, prompt_states):
+            if isinstance(c, KVCache):
+                self.assertEqual(c.offset, ps + 10)
+
+        num_trimmed = trim_prompt_cache(cache, 10)
+        self.assertEqual(num_trimmed, 10)
+
+        for c, ps in zip(cache, prompt_states):
+            if isinstance(c, ArraysCache):
+                self.assertTrue(mx.array_equal(c[0], ps[0]))
+                self.assertTrue(mx.array_equal(c[1], ps[1]))
+            else:
+                self.assertEqual(c.offset, ps)
+
+    def test_checkpoint_survives_deepcopy(self):
+        ac = ArraysCache(size=2)
+        prompt_state = mx.random.normal(shape=(1, 4, 16, 16))
+        ac[0] = prompt_state
+        ac[1] = mx.random.normal(shape=(1, 4, 3))
+        ac.checkpoint()
+
+        ac[0] = mx.random.normal(shape=(1, 4, 16, 16))
+        ac[1] = mx.random.normal(shape=(1, 4, 3))
+
+        ac_copy = copy.deepcopy(ac)
+        self.assertTrue(ac_copy.is_trimmable())
+
+        ac_copy.trim(10)
+        self.assertTrue(mx.array_equal(ac_copy[0], prompt_state))
+        self.assertFalse(mx.array_equal(ac[0], prompt_state))
+
+    def test_checkpoint_with_extract(self):
+        ac = ArraysCache(size=2)
+        ac[0] = mx.random.normal(shape=(3, 4, 16, 16))
+        ac[1] = mx.random.normal(shape=(3, 4, 3))
+        ac.checkpoint()
+
+        ac[0] = mx.random.normal(shape=(3, 4, 16, 16))
+        ac[1] = mx.random.normal(shape=(3, 4, 3))
+
+        extracted = ac.extract(1)
+        self.assertTrue(extracted.is_trimmable())
+
+        extracted.trim(5)
+        self.assertTrue(mx.array_equal(extracted[0], ac._checkpoint[0][1:2]))
+
+    def test_checkpoint_with_filter(self):
+        ac = ArraysCache(size=1)
+        ac[0] = mx.array([[1.0], [2.0], [3.0]])
+        ac.checkpoint()
+
+        ac[0] = mx.array([[10.0], [20.0], [30.0]])
+
+        keep = mx.array([0, 2], mx.int32)
+        ac.filter(keep)
+
+        self.assertEqual(ac._checkpoint[0].shape[0], 2)
+        self.assertTrue(mx.array_equal(ac._checkpoint[0], mx.array([[1.0], [3.0]])))
+
+        ac.trim(5)
+        self.assertTrue(mx.array_equal(ac[0], mx.array([[1.0], [3.0]])))
+
+    def test_checkpoint_with_extend(self):
+        ac1 = ArraysCache(size=1)
+        ac1[0] = mx.array([[1.0], [2.0]])
+        ac1.checkpoint()
+        ac1[0] = mx.array([[10.0], [20.0]])
+
+        ac2 = ArraysCache(size=1)
+        ac2[0] = mx.array([[3.0]])
+        ac2.checkpoint()
+        ac2[0] = mx.array([[30.0]])
+
+        ac1.extend(ac2)
+
+        self.assertEqual(ac1._checkpoint[0].shape[0], 3)
+
+        extracted = ac1.extract(2)
+        self.assertTrue(extracted.is_trimmable())
+        extracted.trim(5)
+        self.assertTrue(mx.array_equal(extracted[0], mx.array([[3.0]])))
+
+    def test_cache_list_checkpoint(self):
+        cl = CacheList(ArraysCache(size=2), KVCache())
+        cl[0][0] = mx.random.normal(shape=(1, 4, 3))
+        cl[0][1] = mx.random.normal(shape=(1, 4, 16, 16))
+        x = mx.random.uniform(shape=(1, 8, 10, 4))
+        cl[1].update_and_fetch(x, x)
+
+        self.assertFalse(cl.is_trimmable())
+        cl.checkpoint()
+        self.assertTrue(cl.is_trimmable())
+
     def test_make_mask_with_cache(self):
         # For 1 time step with no cache, don't need a mask
         mask = create_attention_mask(mx.zeros((1, 1)), cache=None, return_array=False)
