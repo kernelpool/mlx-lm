@@ -11,6 +11,7 @@ from mlx_lm.models import rope_utils
 from mlx_lm.models.base import create_causal_mask, scaled_dot_product_attention
 from mlx_lm.models.cache import KVCache, RotatingKVCache, make_prompt_cache
 from mlx_lm.models.gated_delta import gated_delta_kernel, gated_delta_ops
+from mlx_lm.models.gla import gla_kernel, gla_ops
 from mlx_lm.models.ssm import ssm_attn, ssm_update
 
 
@@ -2565,6 +2566,25 @@ class TestModels(unittest.TestCase):
                 y = y[:, s:e]
                 self.assertTrue(mx.allclose(y, y_gt, rtol=1e-4, atol=1e-4))
                 self.assertTrue(mx.allclose(st, st_gt, rtol=1e-4, atol=1e-3))
+
+    def test_gla(self):
+        mx.random.seed(0)
+        for B in [1, 2]:
+            for T in [1, 4]:
+                H = 16
+                D = 128
+
+                q = mx.random.normal(shape=(B, H, T, D))
+                k = mx.random.normal(shape=(B, H, T, D))
+                v = mx.random.normal(shape=(B, H, T, D))
+                exp_g = mx.random.uniform(shape=(H,))
+                scale = mx.array([D**-0.5])
+                state = mx.random.normal(shape=(B, H, D, D))
+
+                y_op, st_op = gla_ops(q, k, v, exp_g, scale.item(), state)
+                y_c, st_c = gla_kernel(q, k, v, exp_g, scale, state)
+                self.assertTrue(mx.allclose(y_op, y_c, rtol=1e-4, atol=1e-4))
+                self.assertTrue(mx.allclose(st_op, st_c, rtol=1e-4, atol=1e-4))
 
 
 if __name__ == "__main__":
