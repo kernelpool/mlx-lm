@@ -36,6 +36,7 @@ def _make_gla_kernel():
         }
 
         auto decay = static_cast<float>(exp_g[h_idx]);
+        auto sc = static_cast<float>(scale[0]);
 
         for (int t = 0; t < T; ++t) {
             auto v_val = static_cast<float>(v_[dv_idx]);
@@ -46,7 +47,7 @@ def _make_gla_kernel():
                 state[i] = state[i] * decay + static_cast<float>(k_[dk]) * v_val;
                 out += state[i] * static_cast<float>(q_[dk]);
             }
-            out = simd_sum(out);
+            out = simd_sum(out) * sc;
             if (thread_index_in_simdgroup == 0) {
                 y[dv_idx] = static_cast<InT>(out);
             }
@@ -63,7 +64,7 @@ def _make_gla_kernel():
     """
     return mx.fast.metal_kernel(
         name="gla_recurrent",
-        input_names=["q", "k", "v", "exp_g", "state_in", "T"],
+        input_names=["q", "k", "v", "exp_g", "state_in", "scale", "T"],
         output_names=["y", "state_out"],
         source=source,
     )
@@ -115,16 +116,15 @@ def gla_kernel(
     k: mx.array,
     v: mx.array,
     exp_g: mx.array,
-    scale: float,
+    scale: mx.array,
     state: mx.array,
 ) -> Tuple[mx.array, mx.array]:
     """Metal kernel GLA — reads/writes input dtype, computes in float32 registers."""
     B, H, T, D = q.shape
     input_type = q.dtype
-    q = (q * scale).astype(input_type)
 
     return _gla_kernel(
-        inputs=[q, k, v, exp_g, state, T],
+        inputs=[q, k, v, exp_g, state, scale, T],
         template=[("InT", input_type), ("D", D), ("H", H)],
         grid=(32, D, B * H),
         threadgroup=(32, 4, 1),
@@ -137,8 +137,8 @@ def gla_recurrent(
     q: mx.array,
     k: mx.array,
     v: mx.array,
-    g: mx.array,
-    scale: float,
+    exp_g: mx.array,
+    scale: mx.array,
     h: Optional[mx.array] = None,
 ) -> Tuple[mx.array, mx.array]:
     """GLA linear recurrence.
@@ -152,8 +152,8 @@ def gla_recurrent(
 
     Args:
         q, k, v: (B, H, T, D)
-        g: (H,) — decay slopes (negative)
-        scale: attention scale factor
+        exp_g: (H,) — precomputed exp of decay slopes
+        scale: scalar attention scale factor (as mx.array)
         h: optional state (B, H, D, D)
 
     Returns:
@@ -162,11 +162,9 @@ def gla_recurrent(
     """
     B, H, T, D = q.shape
 
-    exp_g = mx.exp(g)
-
     if h is None:
         h = mx.zeros((B, H, D, D), dtype=q.dtype)
 
     if _gla_kernel is not None and mx.default_device() == mx.gpu and D % 32 == 0:
         return gla_kernel(q, k, v, exp_g, scale, h)
-    return gla_ops(q, k, v, exp_g, scale, h)
+    return gla_ops(q, k, v, exp_g, scale.item(), h)

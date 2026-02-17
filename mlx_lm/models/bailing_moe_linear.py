@@ -219,7 +219,8 @@ class LinearAttention(nn.Module):
             scaling_config=args.rope_scaling,
             max_position_embeddings=args.max_position_embeddings,
         )
-        self._slope = self._get_slopes()
+        self._exp_slope = mx.exp(self._get_slopes())
+        self._scale = mx.array([self.scale])
 
     def _get_slopes(self) -> mx.array:
         n = self.num_attention_heads
@@ -281,8 +282,8 @@ class LinearAttention(nn.Module):
             q=queries,
             k=keys,
             v=values,
-            g=self._slope,
-            scale=self.scale,
+            exp_g=self._exp_slope,
+            scale=self._scale,
             h=cache[0],
         )
         output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
