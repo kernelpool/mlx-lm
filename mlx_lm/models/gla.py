@@ -31,35 +31,36 @@ def _make_gla_kernel():
 
         float state[n_per_t];
         for (int i = 0; i < n_per_t; ++i) {
-            auto dk = n_per_t * dk_idx + i;
-            state[i] = static_cast<float>(i_state[dk * D + dv_idx]);
+          auto dk = n_per_t * dk_idx + i;
+          state[i] = static_cast<float>(i_state[dk * D + dv_idx]);
         }
 
         auto decay = static_cast<float>(exp_g[h_idx]);
         auto sc = static_cast<float>(scale[0]);
 
         for (int t = 0; t < T; ++t) {
-            auto v_val = static_cast<float>(v_[dv_idx]);
+          auto v_val = static_cast<float>(v_[dv_idx]);
 
-            float out = 0.0f;
-            for (int i = 0; i < n_per_t; ++i) {
-                auto dk = n_per_t * dk_idx + i;
-                state[i] = state[i] * decay + static_cast<float>(k_[dk]) * v_val;
-                out += state[i] * static_cast<float>(q_[dk]);
-            }
-            out = simd_sum(out) * sc;
-            if (thread_index_in_simdgroup == 0) {
-                y[dv_idx] = static_cast<InT>(out);
-            }
-            q_ += D;
-            k_ += D;
-            v_ += D;
-            y += D;
+          float out = 0.0f;
+          for (int i = 0; i < n_per_t; ++i) {
+            auto dk = n_per_t * dk_idx + i;
+            state[i] = state[i] * decay + static_cast<float>(k_[dk]) * v_val;
+            out += state[i] * static_cast<float>(q_[dk]);
+          }
+          out = simd_sum(out) * sc;
+          if (thread_index_in_simdgroup == 0) {
+            y[dv_idx] = static_cast<InT>(out);
+          }
+          // Increment data pointers to next time step
+          q_ += D;
+          k_ += D;
+          v_ += D;
+          y += D;
         }
 
         for (int i = 0; i < n_per_t; ++i) {
-            auto dk = n_per_t * dk_idx + i;
-            o_state[dk * D + dv_idx] = static_cast<InT>(state[i]);
+          auto dk = n_per_t * dk_idx + i;
+          o_state[dk * D + dv_idx] = static_cast<InT>(state[i]);
         }
     """
     return mx.fast.metal_kernel(
@@ -160,7 +161,7 @@ def gla_recurrent(
         y: (B, H, T, D)
         h: updated state (B, H, D, D)
     """
-    B, H, T, D = q.shape
+    B, H, _, D = q.shape
 
     if h is None:
         h = mx.zeros((B, H, D, D), dtype=q.dtype)
