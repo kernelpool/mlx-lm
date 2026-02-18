@@ -97,11 +97,7 @@ def gla_ops(
     state: mx.array,
 ) -> Tuple[mx.array, mx.array]:
     """Ops-based GLA fallback (CPU or non-standard head_dim)."""
-    dtype = q.dtype
-    q = (q * scale).astype(mx.float32)
-    k = k.astype(mx.float32)
-    v = v.astype(mx.float32)
-    state = state.astype(mx.float32)
+    q = q * scale
     decay = exp_g[None, :, None, None]
 
     outputs = []
@@ -109,7 +105,7 @@ def gla_ops(
         y_t, state = _gla_step(q[:, :, t], k[:, :, t], v[:, :, t], decay, state)
         outputs.append(y_t)
 
-    return mx.stack(outputs, axis=2).astype(dtype), state.astype(dtype)
+    return mx.stack(outputs, axis=2), state
 
 
 def gla_kernel(
