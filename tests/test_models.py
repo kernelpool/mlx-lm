@@ -3259,6 +3259,97 @@ class TestModels(unittest.TestCase):
 
         self.assertTrue(mx.allclose(full, step, atol=1e-3, rtol=1e-3))
 
+    def _make_glm5_next(self):
+        from mlx_lm.models import glm5_next
+
+        args = glm5_next.ModelArgs(
+            text_config=dict(
+                vocab_size=64,
+                hidden_size=32,
+                intermediate_size=64,
+                moe_intermediate_size=32,
+                num_hidden_layers=8,
+                num_attention_heads=4,
+                q_lora_rank=32,
+                kv_lora_rank=32,
+                qk_nope_head_dim=32,
+                qk_rope_head_dim=0,
+                v_head_dim=32,
+                n_routed_experts=8,
+                n_shared_experts=1,
+                num_experts_per_tok=2,
+                first_k_dense_replace=1,
+                index_n_heads=2,
+                index_head_dim=32,
+                index_topk=8,
+                index_kpool=4,
+                linear_attn_config=dict(
+                    num_heads=2,
+                    head_dim=32,
+                    short_conv_kernel_size=4,
+                    gate_lower_bound=-5.0,
+                ),
+                hc_mult=4,
+                hc_sinkhorn_iters=5,
+            )
+        )
+        model = glm5_next.Model(args)
+        model.eval()
+        return model, args
+
+    def test_glm5_next(self):
+        model, args = self._make_glm5_next()
+        self.model_test_runner(
+            model,
+            args.model_type,
+            args.text_config.vocab_size,
+            args.text_config.num_hidden_layers,
+        )
+
+    def test_glm5_next_sparse_consistency(self):
+        model, _ = self._make_glm5_next()
+        mx.random.seed(0)
+        # The sparse indexer activates beyond index_topk + kpool tokens.
+        tokens = mx.random.randint(1, 64, (1, 21))
+        full = model(tokens)
+
+        for split in [7, 20]:
+            cache = model.make_cache()
+            model(tokens[:, :split], cache=cache)
+            chunked = model(tokens[:, split:], cache=cache)
+            self.assertTrue(
+                mx.allclose(full[:, split:], chunked, atol=1e-4, rtol=1e-3),
+                f"chunked prefill mismatch at split {split}",
+            )
+
+        cache = model.make_cache()
+        model(tokens[:, :11], cache=cache)
+        mx.eval([c.state for c in cache])
+        for i in range(11, 21):
+            step = model(tokens[:, i : i + 1], cache=cache)
+            self.assertTrue(
+                mx.allclose(full[:, i : i + 1], step, atol=1e-4, rtol=1e-3),
+                f"stepwise decode mismatch at position {i}",
+            )
+
+        # Server batch path: per-request caches are merged before prompting.
+        batch = mx.random.randint(1, 64, (2, 24))
+        request_caches = [model.make_cache() for _ in range(2)]
+        cache = [
+            request_caches[0][i].merge([c[i] for c in request_caches])
+            for i in range(len(request_caches[0]))
+        ]
+        logits = model(batch, cache=cache)
+        mx.eval([c.state for c in cache])
+        model(mx.argmax(logits[:, -1:], axis=-1), cache=cache)
+        mx.eval([c.state for c in cache])
+        for r in range(2):
+            row = model(batch[r : r + 1], cache=model.make_cache())
+            self.assertTrue(
+                mx.allclose(logits[r : r + 1], row, atol=1e-4, rtol=1e-3),
+                f"batched prefill mismatch for row {r}",
+            )
+
     def test_ssm(self):
         for batch_size in [1, 2]:
             for n_group in [1, 4]:
