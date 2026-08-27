@@ -458,6 +458,9 @@ class KDAAttention(nn.Module):
         if cache is not None:
             cache[1] = ssm_state
             cache.advance(T)
+            aux = [a for a in (cache.lengths, cache.left_padding) if a is not None]
+            if aux:
+                cache[0] = mx.depends(cache[0], aux)
 
         gate = self.g_b_proj(self.g_a_proj(x)).reshape(
             B, T, self.num_heads, self.head_dim
@@ -649,10 +652,17 @@ class DSAAttention(nn.Module):
                     sparse_mask = sparse_mask & mask
                 mask = sparse_mask
 
-        # Ensure the indexer cache is evaluated even if the topk_indices are
-        # unused to keep the graph from getting too large
-        if not self.skip_topk and cache[0] is not None:
-            cache[0].keys = mx.depends(cache[0].keys, (cache[1].keys, cache[1].values))
+        # Tie unconsumed cache side-state into the keys so per-step lazy
+        # chains get evaluated instead of pinning buffers indefinitely.
+        if cache[0] is not None:
+            deps = [cache[0].values]
+            if isinstance(cache[0].offset, mx.array):
+                deps.append(cache[0].offset)
+            if not self.skip_topk:
+                deps.extend([cache[1].keys, cache[1].values])
+                if isinstance(cache[1].offset, mx.array):
+                    deps.append(cache[1].offset)
+            cache[0].keys = mx.depends(cache[0].keys, deps)
 
         if L == 1:
             q = self.embed_q(q)
