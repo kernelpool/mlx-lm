@@ -479,7 +479,7 @@ class KPoolIndexer(nn.Module):
             args.q_lora_rank, self.n_heads * self.head_dim, bias=False
         )
         self.wk = nn.Linear(args.hidden_size, self.head_dim, bias=False)
-        self.k_norm = nn.LayerNorm(self.head_dim)
+        self.k_norm = nn.LayerNorm(self.head_dim, eps=1e-6)
         self.weights_proj = nn.Linear(args.hidden_size, self.n_heads, bias=False)
         self.index_kpool_compress_ape = mx.zeros((self.kpool, self.head_dim))
         self.index_kpool_compress_gate = mx.zeros((self.head_dim, args.hidden_size))
@@ -527,15 +527,8 @@ class KPoolIndexer(nn.Module):
         scores = q @ pool_keys[:, None].swapaxes(-1, -2)
         scores = mx.maximum(scores, 0)
         weights = self.weights_proj(x) * (self.n_heads**-0.5 * self.softmax_scale)
-        if scores.size <= 2**31:
-            scores = weights[..., None, :] @ scores.transpose(0, 2, 1, 3)
-            scores = scores.transpose(0, 2, 1, 3)
-        else:
-            scores = scores * weights.swapaxes(-1, -2)[..., None]
-            summed = scores[:, 0:1]
-            for h in range(1, scores.shape[1]):
-                summed = summed + scores[:, h : h + 1]
-            scores = summed
+        scores = weights[..., None, :] @ scores.transpose(0, 2, 1, 3)
+        scores = scores.transpose(0, 2, 1, 3)
 
         if mask is not None:
             # A pool is a valid candidate only if the query sees all its tokens.
