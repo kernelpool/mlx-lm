@@ -5,6 +5,7 @@ from mlx_lm.tool_parsers import (
     function_gemma,
     gemma4,
     glm47,
+    hy_v4,
     json_tools,
     kimi_k2,
     longcat,
@@ -52,6 +53,15 @@ class TestToolParsing(unittest.TestCase):
             (
                 "[multiply(a=12234585, b=48838483920)]",
                 pythonic,
+            ),
+            (
+                "<tool_call:opensource>multiply"
+                "<arg_key:opensource>a</arg_key:opensource>"
+                "<arg_value:opensource>12234585</arg_value:opensource>"
+                "<arg_key:opensource>b</arg_key:opensource>"
+                "<arg_value:opensource>48838483920</arg_value:opensource>"
+                "</tool_call:opensource>",
+                hy_v4,
             ),
             (
                 'multiply[ARGS]{"a": 12234585, "b": 48838483920}',
@@ -122,6 +132,13 @@ class TestToolParsing(unittest.TestCase):
             (
                 '[get_current_temperature(location="London")]',
                 pythonic,
+            ),
+            (
+                "<tool_call:opensource>get_current_temperature"
+                "<arg_key:opensource>location</arg_key:opensource>"
+                "<arg_value:opensource>London</arg_value:opensource>"
+                "</tool_call:opensource>",
+                hy_v4,
             ),
             (
                 'get_current_temperature[ARGS]{"location": "London"}',
@@ -392,6 +409,81 @@ class TestToolParsing(unittest.TestCase):
         tool_calls = qwen3_coder.parse_tool_call(test_case, tools)
         # parse_tool_call returns dict, not list
         self.assertEqual(tool_calls["arguments"]["msg"], "version 3.10.5-beta")
+
+    def test_hy_v4(self):
+        self.assertEqual(hy_v4.tool_call_start, "<tool_calls:opensource>")
+        self.assertEqual(hy_v4.tool_call_end, "</tool_calls:opensource>")
+
+        # Multiple tool calls in one <tool_calls> block
+        test_case = (
+            "<tool_call:opensource>search"
+            "<arg_key:opensource>query</arg_key:opensource>"
+            "<arg_value:opensource>weather</arg_value:opensource>"
+            "</tool_call:opensource>"
+            "<tool_call:opensource>read_file"
+            "<arg_key:opensource>path</arg_key:opensource>"
+            "<arg_value:opensource>/tmp/test.txt</arg_value:opensource>"
+            "</tool_call:opensource>"
+        )
+        tool_calls = hy_v4.parse_tool_call(test_case, None)
+        self.assertEqual(
+            tool_calls,
+            [
+                {"name": "search", "arguments": {"query": "weather"}},
+                {"name": "read_file", "arguments": {"path": "/tmp/test.txt"}},
+            ],
+        )
+
+        # Call without arguments
+        tool_call = hy_v4.parse_tool_call(
+            "<tool_call:opensource>get_time</tool_call:opensource>", None
+        )
+        self.assertEqual(tool_call, {"name": "get_time", "arguments": {}})
+
+        # Truncated call without the </tool_call:opensource> terminator
+        test_case = (
+            "<tool_call:opensource>search"
+            "<arg_key:opensource>query</arg_key:opensource>"
+            "<arg_value:opensource>weather</arg_value:opensource>"
+        )
+        tool_call = hy_v4.parse_tool_call(test_case, None)
+        self.assertEqual(
+            tool_call,
+            {"name": "search", "arguments": {"query": "weather"}},
+        )
+
+        # Type coercion via schema (string preserved, number/bool coerced)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "configure",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "limit": {"type": "integer"},
+                            "enabled": {"type": "boolean"},
+                        },
+                    },
+                },
+            }
+        ]
+        test_case = (
+            "<tool_call:opensource>configure"
+            "<arg_key:opensource>name</arg_key:opensource>"
+            "<arg_value:opensource>5</arg_value:opensource>"
+            "<arg_key:opensource>limit</arg_key:opensource>"
+            "<arg_value:opensource>5</arg_value:opensource>"
+            "<arg_key:opensource>enabled</arg_key:opensource>"
+            "<arg_value:opensource>true</arg_value:opensource>"
+            "</tool_call:opensource>"
+        )
+        tool_call = hy_v4.parse_tool_call(test_case, tools)
+        self.assertEqual(tool_call["name"], "configure")
+        self.assertEqual(tool_call["arguments"]["name"], "5")
+        self.assertEqual(tool_call["arguments"]["limit"], 5)
+        self.assertEqual(tool_call["arguments"]["enabled"], True)
 
 
 if __name__ == "__main__":
